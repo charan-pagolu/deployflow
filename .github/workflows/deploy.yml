@@ -8,7 +8,26 @@ env:
   IMAGE: ghcr.io/charan-pagolu/deployflow
 
 jobs:
-  build:
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install and build frontend
+        run: cd frontend && npm ci && npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+  build-api:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -33,12 +52,28 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
 
   deploy:
-    needs: build
+    needs: [build-frontend, build-api]
     runs-on: ubuntu-latest
     permissions:
       packages: read
     steps:
-      - name: Deploy to GCP VM
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend-dist/
+
+      - name: Copy frontend to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: pagolucharan21
+          key: ${{ secrets.VM_SSH_KEY }}
+          source: "frontend-dist/*"
+          target: "/var/www/deployflow"
+          strip_components: 1
+          rm: true
+
+      - name: Deploy API and reload Nginx
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VM_HOST }}
@@ -51,6 +86,7 @@ jobs:
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans
             docker image prune -f
+            sudo nginx -s reload
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_ACTOR: ${{ github.actor }}
